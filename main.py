@@ -1,11 +1,11 @@
 import os
 import asyncio
 from datetime import datetime
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
@@ -13,43 +13,95 @@ if not BOT_TOKEN:
 
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
-scheduler = AsyncIOScheduler()
 
-# Сталий розклад
-DAILY_PLAN = {
-    "07:00": "🏋️Тренування: Груди + трицепс",
-    "08:30": "🍳 Сніданок: Омлет з овочами",
-    "13:00": "🍗 Обід: Куряче філе + гречка",
-    "19:00": "🥗 Вечеря: Салат + тунець",
-    "21:00": "💧 Вода: Підбивання: 2.5 літра"
+# Повне меню на день (приклад для жироспалення)
+DAILY_MENU = """
+🍽️ <b>Меню на день</b> (жироспалення):
+- Сніданок: Омлет з 3 яєць + овочі
+- Перекус: Грецький йогурт + ягоди
+- Обід: Куряче філе з булгуром + салат
+- Перекус: Горіхи/протеїновий батончик
+- Вечеря: Риба в мультипечі + овочі
+- Вода: 2.5–3 л 💧
+"""
+
+# Розклад тренувань
+WORKOUTS = {
+    "monday": """
+🔴 <b>Понеділок – ГРУДИ + ТРІЦЕПС + ПЕРЕДНЯ ДЕЛЬТА</b>
+1. Жим штанги лежачи — 4×8
+2. Жим гантелей під кутом — 3×10
+3. Кросовер — 3×12
+4. Віджимання на брусах — 3×макс
+5. Жим вниз на тріцепс (канат) — 3×12
+6. Французький жим — 3×10
+7. Фронтальні підйоми гантелей — 3×15
+""",
+    "wednesday": """
+🔵 <b>Середа – СПИНА + БІЦЕПС + ЗАДНЯ ДЕЛЬТА</b>
+1. Тяга верхнього блоку — 4×10
+2. Тяга штанги в нахилі — 3×10
+3. Підтягування / нижня тяга — 3×макс
+4. Підйом штанги на біцепс — 3×12
+5. Молотки — 3×12
+6. Зворотні махи (задня дельта) — 3×15
+""",
+    "friday": """
+🟢 <b>П’ятниця – НОГИ + ПРЕС + БІЧНА ДЕЛЬТА</b>
+1. Жим ногами / Присідання — 4×10
+2. Румунська тяга — 3×12
+3. Випади — 3×10 на ногу
+4. Прес — 3×15
+5. Бічні махи гантелями — 3×15
+6. Бічні махи у тренажері — 3×15
+"""
 }
 
-# Головна кнопка
-main_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="❓ Що сьогодні?")],
-    ],
-    resize_keyboard=True
-)
 
-@dp.message(CommandStart())
-async def start_handler(message: types.Message):
-    await message.answer(
-        "👋 Бот запущено успішно ✅\nЩоденні нагадування активні!",
-        reply_markup=main_keyboard
-    )
+# Старт
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Що сьогодні?", callback_data="today")]
+    ])
+    await message.answer("👋 Вітаю у SmartDailyBot! Обери дію:", reply_markup=kb)
 
-@dp.message()
-async def today_schedule(message: types.Message):
-    if message.text == "❓ Що сьогодні?":
-        today = datetime.now().strftime("%d.%m.%Y")
-        schedule_text = f"🗓️ <b>Розклад на сьогодні ({today}):</b>\n\n"
-        for time, task in DAILY_PLAN.items():
-            schedule_text += f"<b>{time}</b> — {task}\n"
-        await message.answer(schedule_text)
+
+# Обробка кнопки "Що сьогодні?"
+@dp.callback_query(lambda c: c.data == "today")
+async def handle_today(callback: types.CallbackQuery):
+    weekday = datetime.now().strftime("%A").lower()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏋 Подивитись тренування", callback_data="workout")],
+        [InlineKeyboardButton(text="🍽 Переглянути меню", callback_data="menu")]
+    ])
+
+    if weekday in WORKOUTS:
+        await callback.message.answer(f"🔔 Сьогодні день тренування!", reply_markup=kb)
+    else:
+        await callback.message.answer("🔕 Сьогодні відпочинок, але меню завжди актуальне 🍽", reply_markup=kb)
+
+    await callback.answer()
+
+
+# Обробка кнопки "Подивитись тренування"
+@dp.callback_query(lambda c: c.data == "workout")
+async def handle_workout(callback: types.CallbackQuery):
+    weekday = datetime.now().strftime("%A").lower()
+    workout = WORKOUTS.get(weekday, "Сьогодні немає тренування 💤")
+    await callback.message.answer(workout)
+    await callback.answer()
+
+
+# Обробка кнопки "Переглянути меню"
+@dp.callback_query(lambda c: c.data == "menu")
+async def handle_menu(callback: types.CallbackQuery):
+    await callback.message.answer(DAILY_MENU)
+    await callback.answer()
+
 
 async def main():
-    scheduler.start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
