@@ -1,10 +1,11 @@
 import os
 import asyncio
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from aiogram.filters import Command
+from aiogram.filters import CommandStart, Command
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
@@ -13,34 +14,41 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
-user_chat_id = None  # тимчасово тут зберігаємо ID
 
-reminders = [
-    {"time": "07:00", "text": "🏋️‍♂️ Пора тренування: груди + трицепс 💪"},
-    {"time": "08:30", "text": "🍳 Сніданок: омлет з овочами та авокадо 🥑"},
-    {"time": "13:00", "text": "🍗 Обід: куряче філе, рис та овочі"},
-    {"time": "16:30", "text": "🥜 Перекус: грецький йогурт з горіхами"},
-    {"time": "19:30", "text": "🥦 Вечеря: риба з броколі на пару"},
-    {"time": "22:00", "text": "🛌 Час відпочивати. Завтра новий день!"},
-]
+# Сталий розклад
+DAILY_PLAN = {
+    "07:00": "🏋️Тренування: Груди + трицепс",
+    "08:30": "🍳 Сніданок: Омлет з овочами",
+    "13:00": "🍗 Обід: Куряче філе + гречка",
+    "19:00": "🥗 Вечеря: Салат + тунець",
+    "21:00": "💧 Вода: Підбивання: 2.5 літра"
+}
 
-@dp.message(Command("start"))
+# Головна кнопка
+main_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="❓ Що сьогодні?")],
+    ],
+    resize_keyboard=True
+)
+
+@dp.message(CommandStart())
 async def start_handler(message: types.Message):
-    global user_chat_id
-    user_chat_id = message.chat.id
-    await message.answer("✅ Бот активовано! Щоденні нагадування будуть приходити автоматично.")
+    await message.answer(
+        "👋 Бот запущено успішно ✅\nЩоденні нагадування активні!",
+        reply_markup=main_keyboard
+    )
 
-async def send_reminder(text):
-    if user_chat_id:
-        try:
-            await bot.send_message(chat_id=user_chat_id, text=text)
-        except Exception as e:
-            print(f"❌ Помилка надсилання: {e}")
+@dp.message()
+async def today_schedule(message: types.Message):
+    if message.text == "❓ Що сьогодні?":
+        today = datetime.now().strftime("%d.%m.%Y")
+        schedule_text = f"🗓️ <b>Розклад на сьогодні ({today}):</b>\n\n"
+        for time, task in DAILY_PLAN.items():
+            schedule_text += f"<b>{time}</b> — {task}\n"
+        await message.answer(schedule_text)
 
 async def main():
-    for reminder in reminders:
-        hour, minute = reminder["time"].split(":")
-        scheduler.add_job(send_reminder, CronTrigger(hour=hour, minute=minute), args=[reminder["text"]])
     scheduler.start()
     await dp.start_polling(bot)
 
