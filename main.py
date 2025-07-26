@@ -4,7 +4,7 @@ import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.client.default import DefaultBotProperties
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
@@ -32,22 +32,23 @@ WORKOUT_PLAN = {
 }
 
 MEAL_PLAN = {
-    "breakfast": {"text": "🍼 Омлет з овочами в мультипечі", "calories": 300},
-    "lunch": {"text": "🥚 Куряче філе з броколі", "calories": 500},
-    "dinner": {"text": "🧃 Риба з овочами на парі", "calories": 400}
+    "breakfast": {"text": "🍼 Омлет з овочами в мультипечi", "calories": 300},
+    "lunch": {"text": "🥚 Куряче фiле з броколi", "calories": 500},
+    "dinner": {"text": "🧃 Риба з овочами на парi", "calories": 400}
 }
 
 main_menu = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="❓ Що сьогодні?", callback_data="today")],
+    [InlineKeyboardButton(text="❓ Що сьогоднi?", callback_data="today")],
     [InlineKeyboardButton(text="💪 Тренування", callback_data="workout")],
     [InlineKeyboardButton(text="🍽️ Меню", callback_data="menu")]
 ])
 
 def menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✨ Оновити сніданок", callback_data="gpt_breakfast")],
-        [InlineKeyboardButton(text="✨ Оновити обід", callback_data="gpt_lunch")],
+        [InlineKeyboardButton(text="✨ Оновити снiданок", callback_data="gpt_breakfast")],
+        [InlineKeyboardButton(text="✨ Оновити обiд", callback_data="gpt_lunch")],
         [InlineKeyboardButton(text="✨ Оновити вечерю", callback_data="gpt_dinner")],
+        [InlineKeyboardButton(text="🌐 Редагувати в WebApp", web_app=WebAppInfo(url="https://smartdailybot.vercel.app/menu"))],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
     ])
 
@@ -55,12 +56,13 @@ def workout_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✨ Оновити тренування", callback_data="gpt_workout")],
         [InlineKeyboardButton(text="➕ Додати своє тренування", callback_data="custom_workout")],
+        [InlineKeyboardButton(text="🌐 Редагувати в WebApp", web_app=WebAppInfo(url="https://smartdailybot.vercel.app/workout"))],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
     ])
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message):
-    await message.answer("Привіт! Я SmartDailyBot. Обери дію:", reply_markup=main_menu)
+    await message.answer("Привiт! Я SmartDailyBot. Обери дiю:", reply_markup=main_menu)
 
 @dp.callback_query(F.data == "back")
 async def go_back(callback: types.CallbackQuery):
@@ -97,7 +99,7 @@ async def custom_workout(callback: types.CallbackQuery):
     await callback.message.answer("Надішли своє тренування текстом, і я його збережу (не збережеться після перезапуску)")
     await callback.answer()
 
-@dp.callback_query(F.data.in_(["gpt_breakfast", "gpt_lunch", "gpt_dinner", "gpt_workout"]))
+@dp.callback_query(F.data.in_({"gpt_breakfast", "gpt_lunch", "gpt_dinner", "gpt_workout"}))
 async def gpt_update(callback: types.CallbackQuery):
     target = callback.data.split("_")[1]
     prompts = {
@@ -120,10 +122,12 @@ async def gpt_update(callback: types.CallbackQuery):
         elif target == "workout":
             weekday = datetime.datetime.now().strftime('%A').lower()
             WORKOUT_PLAN[weekday] = result
-        await callback.message.answer(f"Оновлено GPT:\n{result}")
+        await callback.message.answer(f"<b>Оновлено GPT:</b>\n{result}")
     except OpenAIError as e:
         await callback.message.answer(f"Помилка GPT: {str(e)}")
     await callback.answer()
+
+# TODO: Обробка WebAppData та збереження кастомного меню
 
 # Нагадування
 async def send_reminders():
@@ -132,11 +136,11 @@ async def send_reminders():
     user_ids = [7793370563]  # заміни на свій Telegram user_id
     for user_id in user_ids:
         if now == "07:00":
-            await bot.send_message(user_id, "📊 Час тренування! Перевір, що на сьогодні:", reply_markup=main_menu)
+            await bot.send_message(user_id, "📊 Час тренування! Перевiр, що на сьогоднi:", reply_markup=main_menu)
         elif now == "08:30":
-            await bot.send_message(user_id, f"🍼 Сніданок: {MEAL_PLAN['breakfast']['text']}")
+            await bot.send_message(user_id, f"🍼 Снiданок: {MEAL_PLAN['breakfast']['text']}")
         elif now == "13:00":
-            await bot.send_message(user_id, f"🥚 Обід: {MEAL_PLAN['lunch']['text']}")
+            await bot.send_message(user_id, f"🥚 Обiд: {MEAL_PLAN['lunch']['text']}")
         elif now == "19:00":
             await bot.send_message(user_id, f"🧃 Вечеря: {MEAL_PLAN['dinner']['text']}")
 
