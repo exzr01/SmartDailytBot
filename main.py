@@ -129,7 +129,7 @@ async def gpt_update(callback: types.CallbackQuery):
 async def send_reminders():
     now = datetime.datetime.now().strftime('%H:%M')
     weekday = datetime.datetime.now().strftime('%A').lower()
-    user_ids = [123456789]  # заміни на свій Telegram user_id
+    user_ids = [7793370563]  # заміни на свій Telegram user_id
     for user_id in user_ids:
         if now == "07:00":
             await bot.send_message(user_id, "📊 Час тренування! Перевір, що на сьогодні:", reply_markup=main_menu)
