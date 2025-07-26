@@ -1,13 +1,16 @@
 import os
 import asyncio
-from aiogram import Bot, Dispatcher, types
+import datetime
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
-from aiogram.filters import Command
+from aiogram.filters import CommandStart, Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from datetime import datetime, time
+from dotenv import load_dotenv
 import openai
 
-# Завантаження токенів
+load_dotenv()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -16,70 +19,93 @@ if not BOT_TOKEN:
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is not set. Please add it to Railway → Variables.")
 
-# Налаштування OpenAI
-openai.api_key = OPENAI_API_KEY
-
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
+openai.api_key = OPENAI_API_KEY
 
-# Дефолтні плани
-menu_today = {
-    "breakfast": "🍳 Сніданок: Омлет з овочами",
-    "lunch": "🍗 Обід: Куряче філе + гречка",
-    "dinner": "🍜 Вечеря: Салат + тунець",
-    "water": "💧 Вода: Підбивання: 2.5 літра"
+# Розклад
+WORKOUT_PLAN = {
+    "monday": "\ud83d\udd34 Понедiлок \u2013 ГРУДИ + ТРIЦЕПС + ПЕРЕДНЯ ДЕЛЬТА...",
+    "wednesday": "\ud83d\udd35 Середа \u2013 СПИНА + БIЦЕПС + ЗАДНЯ ДЕЛЬТА...",
+    "friday": "\ud83d\udd37 П\u2019ятниця \u2013 НОГИ + ПРЕС + БIЧНА ДЕЛЬТА..."
 }
 
-trainings = {
-    "Monday": "🄴 Понеділок: Груди + Тріцепс + Передня дельта...",
-    "Wednesday": "🔵 Середа: Спина + Біцепс + Задня дельта...",
-    "Friday": "🟢 П'ятниця: Ноги + Прес + Бічна дельта..."
+MEAL_PLAN = {
+    "breakfast": "\ud83c\udf7c Омлет з овочами в мультипечі",
+    "lunch": "\ud83e\udd5a Куряче філе з броколі",
+    "dinner": "\ud83e\uddc3 Риба з овочами на парі"
 }
+
+# Кнопки
+main_menu = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="\u2753 Що сьогодні?", callback_data="today")],
+    [InlineKeyboardButton(text="\ud83d\udcaa Тренування", callback_data="workout")],
+    [InlineKeyboardButton(text="\ud83c\udf7d\ufe0f Меню", callback_data="menu")],
+    [InlineKeyboardButton(text="\u2728 Оновити через GPT", callback_data="gpt_update")]
+])
+
+@dp.message(CommandStart())
+async def start_handler(message: types.Message):
+    await message.answer("Привіт! Я SmartDailyBot. Обери дію:", reply_markup=main_menu)
+
+@dp.callback_query(F.data == "today")
+async def today_plan(callback: types.CallbackQuery):
+    weekday = datetime.datetime.now().strftime('%A').lower()
+    workout = WORKOUT_PLAN.get(weekday, "Сьогодні відпочинок \ud83c\udf1e")
+    meals = f"\n\n\ud83c\udf7c Сніданок: {MEAL_PLAN['breakfast']}\n\ud83e\udd5a Обід: {MEAL_PLAN['lunch']}\n\ud83e\uddc3 Вечеря: {MEAL_PLAN['dinner']}"
+    await callback.message.answer(f"<b>Твій день:</b>\n\n{workout}{meals}")
+    await callback.answer()
+
+@dp.callback_query(F.data == "workout")
+async def workout_details(callback: types.CallbackQuery):
+    weekday = datetime.datetime.now().strftime('%A').lower()
+    workout = WORKOUT_PLAN.get(weekday, "Сьогодні тренувань немає")
+    await callback.message.answer(f"<b>Тренування:</b>\n{workout}")
+    await callback.answer()
+
+@dp.callback_query(F.data == "menu")
+async def menu_details(callback: types.CallbackQuery):
+    meals = f"\ud83c\udf7c Сніданок: {MEAL_PLAN['breakfast']}\n\ud83e\udd5a Обід: {MEAL_PLAN['lunch']}\n\ud83e\uddc3 Вечеря: {MEAL_PLAN['dinner']}"
+    await callback.message.answer(f"<b>Меню на сьогодні:</b>\n{meals}")
+    await callback.answer()
+
+@dp.callback_query(F.data == "gpt_update")
+async def gpt_update(callback: types.CallbackQuery):
+    await callback.message.answer("Генерую новий план з OpenAI...")
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Ти фітнес-дієтолог. Створи коротке меню на день з трьома прийомами їжі для жироспалення."},
+                {"role": "user", "content": "Онови меню для жироспалення. Вкажи сніданок, обід, вечерю."}
+            ]
+        )
+        content = response.choices[0].message.content
+        await callback.message.answer(f"Оновлене меню GPT:\n{content}")
+    except Exception as e:
+        await callback.message.answer(f"Помилка при генерації: {e}")
+    await callback.answer()
 
 # Нагадування
-async def send_reminder(user_id: int, message: str):
-    await bot.send_message(user_id, message)
+async def send_reminders():
+    now = datetime.datetime.now().strftime('%H:%M')
+    weekday = datetime.datetime.now().strftime('%A').lower()
+    for user_id in [7793370563]:  # Тут додай свій ID або список
+        if now == "07:00":
+            await bot.send_message(user_id, "\ud83d\udcca Час тренування! Перевір, що на сьогодні:", reply_markup=main_menu)
+        elif now == "08:30":
+            await bot.send_message(user_id, f"\ud83c\udf7c Сніданок: {MEAL_PLAN['breakfast']}")
+        elif now == "13:00":
+            await bot.send_message(user_id, f"\ud83e\udd5a Обід: {MEAL_PLAN['lunch']}")
+        elif now == "19:00":
+            await bot.send_message(user_id, f"\ud83e\uddc3 Вечеря: {MEAL_PLAN['dinner']}")
 
-# Складання розкладу на сьогодні
-@dp.message(Command("Що сьогодні?"))
-async def today_schedule(message: types.Message):
-    today = datetime.now().strftime("%d.%m.%Y")
-    weekday = datetime.now().strftime("%A")
-    plan = f"\ud83d\udcc5 <b>Розклад на сьогодні ({today}):</b>\n"
-    plan += "07:00 — 💪 Тренування\n" if weekday in trainings else ""
-    plan += f"08:30 — {menu_today['breakfast']}\n"
-    plan += f"13:00 — {menu_today['lunch']}\n"
-    plan += f"19:00 — {menu_today['dinner']}\n"
-    plan += f"21:00 — {menu_today['water']}"
-    await message.answer(plan)
-
-# Оновлення меню через GPT
-@dp.message(Command("онови_меню"))
-async def update_menu_handler(message: types.Message):
-    prompt = "Згенеруй нове меню на день для жироспалення з використанням мультипечі. Виведи 3 прийоми їжі та норму води."
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    new_plan = response.choices[0].message.content
-    await message.answer(f"📊 Оновлене меню GPT:\n{new_plan}")
-
-@dp.message(Command("start"))
-async def start_handler(message: types.Message):
-    await message.answer("👋 Бот активовано! Щоденні нагадування будуть приходити автоматично.")
-
-    user_id = message.from_user.id
-    scheduler.add_job(send_reminder, "cron", hour=7, minute=0, args=[user_id, "💪 Час тренування!"])
-    scheduler.add_job(send_reminder, "cron", hour=8, minute=30, args=[user_id, menu_today['breakfast']])
-    scheduler.add_job(send_reminder, "cron", hour=13, minute=0, args=[user_id, menu_today['lunch']])
-    scheduler.add_job(send_reminder, "cron", hour=19, minute=0, args=[user_id, menu_today['dinner']])
-    scheduler.add_job(send_reminder, "cron", hour=21, minute=0, args=[user_id, menu_today['water']])
-
-    scheduler.start()
+scheduler.add_job(send_reminders, 'cron', minute='0', hour='7,8,13,19')
 
 async def main():
+    scheduler.start()
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
