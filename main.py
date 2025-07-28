@@ -4,158 +4,97 @@ import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.client.default import DefaultBotProperties
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from openai import OpenAI, OpenAIError
+from openai import OpenAI
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is not set. Please add it to Railway → Variables.")
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY is not set. Please add it to Railway → Variables.")
-
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
-scheduler = AsyncIOScheduler()
 openai = OpenAI(api_key=OPENAI_API_KEY)
 
-completed_sets = set()
+# 📌 Збереження виконаних підходів
+user_progress = {}
 
-WORKOUT_PLAN = {
-    "monday": "🔴 Понедiлок – ГРУДИ + ТРIЦЕПС + ПЕРЕДНЯ ДЕЛЬТА",
-    "wednesday": "🔵 Середа – СПИНА + БIЦЕПС + ЗАДНЯ ДЕЛЬТА",
-    "friday": "🔷 П’ятниця – НОГИ + ПРЕС + БIЧНА ДЕЛЬТА"
+TRAINING_PLAN = {
+    "monday": [
+        {"exercise": "Жим гантелей на груди", "sets": 4, "reps": 12},
+        {"exercise": "Підйом гантелей в сторони", "sets": 3, "reps": 15},
+        {"exercise": "Французький жим", "sets": 4, "reps": 10}
+    ],
+    "wednesday": [
+        {"exercise": "Підтягування з утриманням", "sets": 4, "reps": 8},
+        {"exercise": "Зведення гантелей за спину", "sets": 3, "reps": 12},
+        {"exercise": "Молоткова з грифом", "sets": 4, "reps": 10}
+    ],
+    "friday": [
+        {"exercise": "Присідання з гантелями", "sets": 4, "reps": 15},
+        {"exercise": "Румунська тяга", "sets": 3, "reps": 12},
+        {"exercise": "Скручування на прес", "sets": 4, "reps": 20}
+    ]
 }
 
-MEAL_PLAN = {
-    "breakfast": {"text": "🍼 Омлет з овочами в мультипечі", "calories": 300},
-    "lunch": {"text": "🥚 Куряче філе з броколі", "calories": 500},
-    "dinner": {"text": "🧃 Риба з овочами на парі", "calories": 400}
-}
+def get_weekday():
+    return datetime.datetime.now().strftime("%A").lower()
 
-main_menu = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="❓ Що сьогодні?", callback_data="today")],
-    [InlineKeyboardButton(text="💪 Тренування", callback_data="workout")],
-    [InlineKeyboardButton(text="🍽️ Меню", callback_data="menu")]
-])
-
-def menu_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✨ Оновити сніданок", callback_data="gpt_breakfast")],
-        [InlineKeyboardButton(text="✨ Оновити обід", callback_data="gpt_lunch")],
-        [InlineKeyboardButton(text="✨ Оновити вечерю", callback_data="gpt_dinner")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
-    ])
-
-def workout_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Відмітити виконане", callback_data="track_workout")],
-        [InlineKeyboardButton(text="✨ Оновити тренування", callback_data="gpt_workout")],
-        [InlineKeyboardButton(text="➕ Додати своє тренування", callback_data="custom_workout")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
-    ])
+def generate_workout_keyboard(user_id, day_key):
+    keyboard = []
+    progress = user_progress.get(user_id, {}).get(day_key, {})
+    for i, ex in enumerate(TRAINING_PLAN[day_key]):
+        done_sets = progress.get(i, 0)
+        label = f"{ex['exercise']} — {done_sets}/{ex['sets']} підходів"
+        callback_data = f"set_{day_key}_{i}"
+        keyboard.append([InlineKeyboardButton(text=label, callback_data=callback_data)])
+    keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 @dp.message(CommandStart())
-async def start_handler(message: types.Message):
-    await message.answer("Привіт! Я SmartDailyBot. Обери дію:", reply_markup=main_menu)
-
-@dp.callback_query(F.data == "back")
-async def go_back(callback: types.CallbackQuery):
-    await callback.message.edit_text("⬅️ Повертаємось в головне меню", reply_markup=main_menu)
-    await callback.answer()
+async def start(message: types.Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❓ Що сьогодні?", callback_data="today")]
+    ])
+    await message.answer("Привіт! Обери дію:", reply_markup=keyboard)
 
 @dp.callback_query(F.data == "today")
-async def today_plan(callback: types.CallbackQuery):
-    weekday = datetime.datetime.now().strftime('%A').lower()
-    workout = WORKOUT_PLAN.get(weekday, "Сьогодні немає тренування. Рекомендуємо легке кардіо 🚶‍♂️")
-    meals = "\n".join([
-        f"{MEAL_PLAN[meal]['text']} — {MEAL_PLAN[meal]['calories']} ккал" for meal in ["breakfast", "lunch", "dinner"]
+async def today_plan(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    day = get_weekday()
+    if day in TRAINING_PLAN:
+        text = "<b>Тренування:</b>\n"
+        for ex in TRAINING_PLAN[day]:
+            text += f"• {ex['exercise']} — {ex['sets']}x{ex['reps']}\n"
+        await callback.message.answer(text, reply_markup=generate_workout_keyboard(user_id, day))
+    else:
+        await callback.message.answer("Сьогодні немає тренування. Рекомендуємо кардіо 🚶‍♂️")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("set_"))
+async def handle_set(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    _, day_key, index = callback.data.split("_")
+    index = int(index)
+
+    progress = user_progress.setdefault(user_id, {}).setdefault(day_key, {})
+    progress[index] = min(progress.get(index, 0) + 1, TRAINING_PLAN[day_key][index]['sets'])
+
+    await callback.message.edit_reply_markup(reply_markup=generate_workout_keyboard(user_id, day_key))
+    await callback.answer("✅ Підхід відмічено")
+
+@dp.callback_query(F.data == "back")
+async def go_back(callback: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❓ Що сьогодні?", callback_data="today")]
     ])
-    await callback.message.answer(f"<b>Твій день:</b>\n\n<b>Тренування:</b>\n{workout}\n\n<b>Меню:</b>\n{meals}")
+    await callback.message.edit_text("⬅️ Повертаємось", reply_markup=keyboard)
     await callback.answer()
-
-@dp.callback_query(F.data == "workout")
-async def workout_details(callback: types.CallbackQuery):
-    weekday = datetime.datetime.now().strftime('%A').lower()
-    workout = WORKOUT_PLAN.get(weekday, "Сьогодні немає тренування. Спробуй кардіо 🚴")
-    if callback.from_user.id in completed_sets:
-        workout += "\n✅ <i>Вже відмічено як виконане</i>"
-    await callback.message.answer(f"<b>Тренування:</b>\n{workout}", reply_markup=workout_keyboard())
-    await callback.answer()
-
-@dp.callback_query(F.data == "track_workout")
-async def track_workout(callback: types.CallbackQuery):
-    completed_sets.add(callback.from_user.id)
-    await callback.message.answer("✅ Тренування відмічено як виконане!")
-    await callback.answer()
-
-@dp.callback_query(F.data == "menu")
-async def menu_details(callback: types.CallbackQuery):
-    meals = "\n".join([
-        f"{MEAL_PLAN[meal]['text']} — {MEAL_PLAN[meal]['calories']} ккал" for meal in ["breakfast", "lunch", "dinner"]
-    ])
-    await callback.message.answer(f"<b>Меню на сьогодні:</b>\n{meals}", reply_markup=menu_keyboard())
-    await callback.answer()
-
-@dp.callback_query(F.data == "custom_workout")
-async def custom_workout(callback: types.CallbackQuery):
-    await callback.message.answer("Надішли своє тренування текстом, і я його збережу (не збережеться після перезапуску)")
-    await callback.answer()
-
-@dp.callback_query(F.data.in_(["gpt_breakfast", "gpt_lunch", "gpt_dinner", "gpt_workout"]))
-async def gpt_update(callback: types.CallbackQuery):
-    target = callback.data.split("_")[1]
-    prompts = {
-        "breakfast": "Створи здоровий сніданок до 300 ккал у форматі 1 речення",
-        "lunch": "Створи здоровий обід до 500 ккал у форматі 1 речення",
-        "dinner": "Створи легку вечерю до 400 ккал у форматі 1 речення",
-        "workout": "Створи коротке тренування для жироспалення на один день"
-    }
-    try:
-        chat = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Ти фітнес-асистент і дієтолог."},
-                {"role": "user", "content": prompts[target]}
-            ]
-        )
-        result = chat.choices[0].message.content
-        if target in MEAL_PLAN:
-            MEAL_PLAN[target]['text'] = result
-        elif target == "workout":
-            weekday = datetime.datetime.now().strftime('%A').lower()
-            WORKOUT_PLAN[weekday] = result
-        await callback.message.answer(f"Оновлено GPT:\n{result}")
-    except OpenAIError as e:
-        await callback.message.answer(f"Помилка GPT: {str(e)}")
-    await callback.answer()
-
-# Нагадування
-async def send_reminders():
-    now = datetime.datetime.now().strftime('%H:%M')
-    weekday = datetime.datetime.now().strftime('%A').lower()
-    user_ids = [7793370563]
-    for user_id in user_ids:
-        if now == "07:00":
-            await bot.send_message(user_id, "📊 Час тренування! Перевір, що на сьогодні:", reply_markup=main_menu)
-        elif now == "08:30":
-            await bot.send_message(user_id, f"🍼 Сніданок: {MEAL_PLAN['breakfast']['text']}")
-        elif now == "13:00":
-            await bot.send_message(user_id, f"🥚 Обід: {MEAL_PLAN['lunch']['text']}")
-        elif now == "19:00":
-            await bot.send_message(user_id, f"🧃 Вечеря: {MEAL_PLAN['dinner']['text']}")
-
-scheduler.add_job(send_reminders, 'cron', minute='0', hour='7,8,13,19')
 
 async def main():
-    scheduler.start()
     await dp.start_polling(bot)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
