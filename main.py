@@ -57,13 +57,15 @@ WORKOUTS = {
     }
 }
 
-# Прогрес користувача (тимчасовий)
 user_progress = {}
+user_cardio = {}
 
+# --- Кнопки ---
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💪 Тренування", callback_data="workout")],
-        [InlineKeyboardButton(text="🍽️ Меню", callback_data="menu")]
+        [InlineKeyboardButton(text="➕ Додати активність", callback_data="add_activity")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")]
     ])
 
 def workout_day_keyboard():
@@ -78,12 +80,13 @@ def exercises_keyboard(weekday, user_id):
     for i, (exercise, reps) in enumerate(WORKOUTS[weekday]["exercises"]):
         done_mark = "✅" if i in done else ""
         buttons.append([InlineKeyboardButton(
-            text=f"{done_mark} {exercise} ({reps})", 
+            text=f"{done_mark} {exercise} ({reps})",
             callback_data=f"toggle_{weekday}_{i}"
         )])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# --- Обробники ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message):
     await message.answer("Привіт! Обери дію:", reply_markup=main_menu())
@@ -94,8 +97,7 @@ async def workout_today(callback: types.CallbackQuery):
     if weekday not in WORKOUTS:
         await callback.message.answer("Сьогодні день відпочинку 🌞")
     else:
-        await callback.message.answer(
-            f"<b>{WORKOUTS[weekday]['title']}</b>", reply_markup=workout_day_keyboard())
+        await callback.message.answer(f"<b>{WORKOUTS[weekday]['title']}</b>", reply_markup=workout_day_keyboard())
     await callback.answer()
 
 @dp.callback_query(F.data == "workout_details")
@@ -124,6 +126,37 @@ async def toggle_exercise(callback: types.CallbackQuery):
     keyboard = exercises_keyboard(weekday, user_id)
     await callback.message.edit_reply_markup(reply_markup=keyboard)
     await callback.answer("Оновлено ✅")
+
+@dp.callback_query(F.data == "add_activity")
+async def add_custom_activity(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    today = datetime.datetime.now().strftime('%A').lower()
+    user_cardio.setdefault(user_id, {}).setdefault(today, []).append("Кардіо / Додаткова активність")
+    await callback.message.answer("✅ Активність додано до статистики!")
+    await callback.answer()
+
+@dp.callback_query(F.data == "stats")
+async def show_statistics(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    names = {
+        "monday": "Пн",
+        "tuesday": "Вт",
+        "wednesday": "Ср",
+        "thursday": "Чт",
+        "friday": "Пт",
+        "saturday": "Сб",
+        "sunday": "Нд"
+    }
+    report = "📊 <b>Статистика тренувань:</b>\n"
+    for day in days:
+        if day in WORKOUTS:
+            completed = "✅" if user_progress.get(user_id, {}).get(day) else "❌"
+            report += f"{names[day]} – {WORKOUTS[day]['title']} {completed}\n"
+        if user_cardio.get(user_id, {}).get(day):
+            report += f"    🏃 Додаткова активність: {len(user_cardio[user_id][day])} раз(ів)\n"
+    await callback.message.answer(report)
+    await callback.answer()
 
 @dp.callback_query(F.data == "back")
 async def go_back(callback: types.CallbackQuery):
