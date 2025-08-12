@@ -1,6 +1,6 @@
 import os
 import asyncio
-import datetime
+import datetime as dt
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
@@ -19,7 +19,7 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 
-# --- Структура тренувань ---
+# --- Структура тренувань (як було) ---
 WORKOUTS = {
     "monday": {
         "title": "🔴 Понеділок – ГРУДИ + ТРІЦЕПС + ПЕРЕДНЯ ДЕЛЬТА",
@@ -57,123 +57,139 @@ WORKOUTS = {
     }
 }
 
-# Пам'ять у процесі (перезапускається при рестарті)
-user_progress = {}  # {user_id: {day_key: set(ex_idx)}}
-user_cardio = {}    # {user_id: {day_key: [activities]}}
+# ======== НОВЕ: зберігаємо прогрес по ДАТІ =========
+# user_progress = { user_id: { "YYYY-MM-DD": set(exercise_indexes) } }
+# user_cardio   = { user_id: { "YYYY-MM-DD": [activities...] } }
+user_progress: dict[int, dict[str, set[int]]] = {}
+user_cardio: dict[int, dict[str, list[str]]] = {}
 
-# --- Утиліти дат ---
-def get_today_key() -> str | None:
-    # 0=Mon ... 6=Sun
-    wd = datetime.datetime.now().weekday()
+# --- Дати/дні ---
+def today_date_str() -> str:
+    return dt.date.today().isoformat()  # 'YYYY-MM-DD'
+
+def weekday_key_by_date(d: dt.date) -> str | None:
     mapping = {0: "monday", 2: "wednesday", 4: "friday"}
-    return mapping.get(wd)
+    return mapping.get(d.weekday())
 
-def weekday_name_ua(day_key: str) -> str:
-    mapping = {
-        "monday": "Пн",
-        "wednesday": "Ср",
-        "friday": "Пт",
-    }
-    return mapping.get(day_key, day_key)
+def weekday_short_ua(d: dt.date) -> str:
+    return ["Пн","Вт","Ср","Чт","Пт","Сб","Нд"][d.weekday()]
 
 # --- Кнопки ---
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💪 Тренування", callback_data="workout")],
+        [InlineKeyboardButton(text="💪 Тренування", callback_data="workout_today")],
         [InlineKeyboardButton(text="➕ Додати активність", callback_data="add_activity")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")]
     ])
 
-def workout_day_keyboard(day_key: str | None):
-    rows = []
-    if day_key:
-        rows.append([InlineKeyboardButton(text="Переглянути деталі", callback_data=f"workout_details:{day_key}")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-def exercises_keyboard(day_key: str, user_id: int):
+def exercises_keyboard(date_str: str, day_key: str, user_id: int):
     buttons = []
-    done = user_progress.get(user_id, {}).get(day_key, set())
+    done = user_progress.get(user_id, {}).get(date_str, set())
     for i, (exercise, reps) in enumerate(WORKOUTS[day_key]["exercises"]):
-        done_mark = "✅" if i in done else "⬜️"
+        mark = "✅" if i in done else "⬜️"
         buttons.append([InlineKeyboardButton(
-            text=f"{done_mark} {exercise} ({reps})",
-            callback_data=f"toggle:{day_key}:{i}"
+            text=f"{mark} {exercise} ({reps})",
+            callback_data=f"toggle:{date_str}:{day_key}:{i}"
         )])
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- Обробники ---
+# --- Рендер тренування на день (одразу з чекбоксами) ---
+def render_workout_for_today(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    date_str = today_date_str()
+    day_key = weekday_key_by_date(dt.date.today())
+    if not day_key:
+        # День відпочинку, показуємо меседж + назад
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
+        ])
+        return ("Сьогодні день відпочинку 🌞 Зроби кардіо 30–40 хв 🚶‍♂️", kb)
+    title = WORKOUTS[day_key]["title"]
+    text = f"<b>{title}</b>\nОбирай вправи та відмічай виконане:"
+    kb = exercises_keyboard(date_str, day_key, user_id)
+    return (text, kb)
+
+# --- Handlers ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message):
     await message.answer("Привіт! Обери дію:", reply_markup=main_menu())
 
-@dp.callback_query(F.data == "workout")
+# НОВЕ: натискаєш «Тренування» — одразу план з чекбоксами (без «деталей»)
+@dp.callback_query(F.data == "workout_today")
 async def workout_today(callback: types.CallbackQuery):
-    day_key = get_today_key()
-    if not day_key:
-        await callback.message.answer("Сьогодні день відпочинку 🌞", reply_markup=workout_day_keyboard(None))
-    else:
-        await callback.message.answer(
-            f"<b>{WORKOUTS[day_key]['title']}</b>",
-            reply_markup=workout_day_keyboard(day_key)
-        )
+    text, kb = render_workout_for_today(callback.from_user.id)
+    await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("workout_details"))
-async def workout_details(callback: types.CallbackQuery):
-    # формат: workout_details:monday
-    parts = callback.data.split(":")
-    day_key = parts[1] if len(parts) > 1 else get_today_key()
-    if not day_key or day_key not in WORKOUTS:
-        await callback.message.answer("Сьогодні немає силового дня. Зроби кардіо 30–40 хв 🚶‍♂️", reply_markup=main_menu())
-        await callback.answer()
-        return
-    keyboard = exercises_keyboard(day_key, callback.from_user.id)
-    await callback.message.answer("Вправи на сьогодні:", reply_markup=keyboard)
-    await callback.answer()
-
+# Тогл по конкретній ДАТІ (щодня чистий аркуш)
 @dp.callback_query(F.data.startswith("toggle:"))
 async def toggle_exercise(callback: types.CallbackQuery):
-    # формат: toggle:monday:2
-    _, day_key, idx = callback.data.split(":")
+    # toggle:YYYY-MM-DD:day_key:index
+    _, date_str, day_key, idx = callback.data.split(":")
     index = int(idx)
-    user_id = callback.from_user.id
+    uid = callback.from_user.id
 
-    user_progress.setdefault(user_id, {}).setdefault(day_key, set())
-    if index in user_progress[user_id][day_key]:
-        user_progress[user_id][day_key].remove(index)
+    user_progress.setdefault(uid, {}).setdefault(date_str, set())
+    if index in user_progress[uid][date_str]:
+        user_progress[uid][date_str].remove(index)
     else:
-        user_progress[user_id][day_key].add(index)
+        user_progress[uid][date_str].add(index)
 
-    keyboard = exercises_keyboard(day_key, user_id)
-    # редагуємо існуюче повідомлення — завжди передаємо markup
-    await callback.message.edit_reply_markup(reply_markup=keyboard)
+    kb = exercises_keyboard(date_str, day_key, uid)
+    await callback.message.edit_reply_markup(reply_markup=kb)
     await callback.answer("Оновлено ✅")
 
 @dp.callback_query(F.data == "add_activity")
 async def add_custom_activity(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    day_key = get_today_key() or "rest"
-    user_cardio.setdefault(user_id, {}).setdefault(day_key, []).append("Кардіо / Додаткова активність")
+    uid = callback.from_user.id
+    date_str = today_date_str()
+    user_cardio.setdefault(uid, {}).setdefault(date_str, []).append("Кардіо / Додаткова активність")
     await callback.message.answer("✅ Активність додано до статистики!", reply_markup=main_menu())
     await callback.answer()
 
+# РОЗШИРЕНА статистика: останні 14 днів + підсумок за тиждень
 @dp.callback_query(F.data == "stats")
 async def show_statistics(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    report = "📊 <b>Статистика тренувань:</b>\n"
-    for day_key in ["monday", "wednesday", "friday"]:
-        title = WORKOUTS[day_key]["title"]
-        completed_flag = "✅" if user_progress.get(user_id, {}).get(day_key) else "❌"
-        report += f"{weekday_name_ua(day_key)} – {title} {completed_flag}\n"
-        if user_cardio.get(user_id, {}).get(day_key):
-            report += f"    🏃 Додаткова активність: {len(user_cardio[user_id][day_key])} раз(ів)\n"
-    # День відпочинку — також покажемо, якщо були активності
-    rest_acts = user_cardio.get(user_id, {}).get("rest", [])
-    if rest_acts:
-        report += f"Нд/дні відпочинку – 🏃 активність: {len(rest_acts)} раз(ів)\n"
-    await callback.message.answer(report, reply_markup=main_menu())
+    uid = callback.from_user.id
+    today = dt.date.today()
+    start = today - dt.timedelta(days=13)
+    lines = ["📊 <b>Статистика (ост. 14 днів)</b>"]
+
+    sessions_done = 0
+    sessions_total = 0
+    cardio_total = 0
+
+    for i in range(14):
+        day = start + dt.timedelta(days=i)
+        dstr = day.isoformat()
+        dshort = weekday_short_ua(day)
+
+        day_key = weekday_key_by_date(day)
+        cardio_cnt = len(user_cardio.get(uid, {}).get(dstr, []))
+        cardio_total += cardio_cnt
+
+        if day_key:
+            total_ex = len(WORKOUTS[day_key]["exercises"])
+            done_ex = len(user_progress.get(uid, {}).get(dstr, set()))
+            status = "✅" if done_ex > 0 else "❌"
+            sessions_total += 1
+            if done_ex == total_ex:
+                sessions_done += 1
+            lines.append(f"{dshort} {dstr} — {WORKOUTS[day_key]['title']} | {done_ex}/{total_ex} вправ {status}"
+                         + (f" | 🏃 {cardio_cnt}" if cardio_cnt else ""))
+        else:
+            # Відпочинок
+            status = "—"
+            lines.append(f"{dshort} {dstr} — День відпочинку {status}"
+                         + (f" | 🏃 {cardio_cnt}" if cardio_cnt else ""))
+
+    # Підсумок
+    rate = f"{(sessions_done / sessions_total * 100):.0f}%" if sessions_total else "0%"
+    lines.append("\n<b>Підсумок за 14 днів</b>")
+    lines.append(f"• Повністю виконаних тренувань: {sessions_done}/{sessions_total} ({rate})")
+    lines.append(f"• Додаткові активності (кардіо тощо): {cardio_total}")
+
+    await callback.message.answer("\n".join(lines), reply_markup=main_menu())
     await callback.answer()
 
 @dp.callback_query(F.data == "back")
@@ -182,7 +198,6 @@ async def go_back(callback: types.CallbackQuery):
     await callback.answer()
 
 async def main():
-    # Якщо захочеш — додамо нагадування через scheduler.add_job(...)
     scheduler.start()
     await dp.start_polling(bot)
 
